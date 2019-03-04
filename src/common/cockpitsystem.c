@@ -21,7 +21,9 @@
 
 #include <glib/gstdio.h>
 
+#if HAVE_SYSTEMD
 #include <systemd/sd-login.h>
+#endif
 
 #include <sys/types.h>
 #include <errno.h>
@@ -185,7 +187,11 @@ cockpit_system_session_id (void)
   int res;
 
   pid = getppid ();
+#if HAVE_SYSTEMD
   res = sd_pid_get_session (pid, &session_id);
+#else
+  res = -1;
+#endif
   if (res == 0)
     {
       return session_id;

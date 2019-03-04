@@ -34,7 +34,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#if HAVE_SYSTEMD
 #include <systemd/sd-daemon.h>
+#endif
 
 /* Used during testing */
 gboolean cockpit_webserver_want_certificate = FALSE;
@@ -1275,13 +1277,16 @@ cockpit_web_server_initable_init (GInitable *initable,
 
   gboolean ret = FALSE;
   gboolean failed = FALSE;
+#if HAVE_SYSTEMD
   int n, fd;
+#endif
 
   server->socket_service = g_socket_service_new ();
 
   /* The web server has to be explicitly started */
   g_socket_service_stop (server->socket_service);
 
+#if HAVE_SYSTEMD
   n = sd_listen_fds (0);
   if (n > 0)
     {
@@ -1325,6 +1330,7 @@ cockpit_web_server_initable_init (GInitable *initable,
       server->socket_activated = TRUE;
     }
   else
+#endif
     {
       if (server->address)
         {

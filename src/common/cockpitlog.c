@@ -25,7 +25,10 @@
 #include "cockpitlog.h"
 #include "cockpitconf.h"
 
+#if HAVE_SYSTEMD
 #include <systemd/sd-journal.h>
+#endif
+
 #include <syslog.h>
 #include <string.h>
 
@@ -127,6 +130,7 @@ cockpit_journal_log_handler (const gchar *log_domain,
 
   if (to_journal)
     {
+#if HAVE_SYSTEMD
       if (have_journal)
         {
           sd_journal_send ("MESSAGE=%s", message,
@@ -135,6 +139,9 @@ cockpit_journal_log_handler (const gchar *log_domain,
                            NULL);
         }
       else if (old_handler == NULL)
+# else
+      priority = priority;
+#endif
         {
             g_printerr ("%s: %s: %s\n",
                         prefix,
@@ -154,7 +161,9 @@ cockpit_set_journal_logging (const gchar *stderr_domain,
 {
   GLogLevelFlags fatal;
   const gchar **fatals;
+#if HAVE_SYSTEMD
   int fd;
+#endif
 
   fatals = cockpit_conf_strv ("Log", "Fatal", ' ');
   if (fatals)
@@ -179,12 +188,17 @@ cockpit_set_journal_logging (const gchar *stderr_domain,
   /* SELinux won't let us always open the sd_journal_stream_fd
    * so just check that the main journal socket exists
    */
+#if HAVE_SYSTEMD
   have_journal = g_file_test ("/run/systemd/journal/socket", G_FILE_TEST_EXISTS);
+#else
+  have_journal = FALSE;
+#endif
   if (only)
     old_handler = NULL;
 
   if (only && stderr_domain)
     {
+#if HAVE_SYSTEMD
       fd = sd_journal_stream_fd (stderr_domain, LOG_WARNING, 0);
       if (fd < 0)
         {
@@ -201,5 +215,6 @@ cockpit_set_journal_logging (const gchar *stderr_domain,
               close (fd);
             }
         }
+#endif
     }
 }
