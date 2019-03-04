@@ -244,7 +244,7 @@ if test ! -z "$with_systemdunitdir"; then
   systemdunitdir=$with_systemdunitdir
 elif test "$enable_prefix_only" = "yes"; then
     systemdunitdir='${prefix}/lib/systemd/system'
-else
+elif test "enable_systemd" = "yes"; then
   PKG_CHECK_MODULES(SYSTEMD, [systemd])
   AC_MSG_CHECKING(for systemd unit dir)
   systemdunitdir=$($PKG_CONFIG systemd --variable=systemdsystemunitdir)
