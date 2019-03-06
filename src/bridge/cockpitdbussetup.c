@@ -32,6 +32,215 @@
 #include <shadow.h>
 #include <stdio.h>
 
+#ifndef __GLIBC__
+ /* Musl libc does not support fgetspent_r(), write own
+  * wrapper
+  */
+
+#include <assert.h>  /* assert */
+#include <errno.h>   /* ENOENT, ERANGE */
+#include <pthread.h> /* pthread_mutex_* */
+#include <pwd.h>     /* fgetpwent, getpwent, struct passwd */
+#include <stddef.h>  /* NULL, size_t */
+#include <stdio.h>   /* FILE */
+#include <string.h>  /* memcpy, stpcpy, strlcpy, strlen */
+
+static pthread_mutex_t pwent_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static int __fgetpwent_r(FILE *stream, struct passwd *pwd, char *buf,
+                         size_t len, struct passwd **result)
+{
+	struct passwd *pwtmp;
+	char *cursor = buf, *end = buf + len;
+
+	*result = NULL;
+	pthread_mutex_lock(&pwent_mutex);
+	pwtmp = stream != NULL ? fgetpwent(stream) : getpwent();
+	if (pwtmp == NULL) {
+		pthread_mutex_unlock(&pwent_mutex);
+		return ENOENT;
+	}
+	memcpy(pwd, pwtmp, sizeof(*pwd));
+	if (pwtmp->pw_name != NULL) {
+		pwd->pw_name = cursor;
+		cursor += strlcpy(cursor, pwtmp->pw_name, end - cursor) + 1;
+		if (cursor > end) {
+			goto err_unlock;
+		}
+	}
+	if (pwtmp->pw_passwd != NULL) {
+		pwd->pw_passwd = cursor;
+		cursor += strlcpy(cursor, pwtmp->pw_passwd, end - cursor) + 1;
+		if (cursor > end) {
+			goto err_unlock;
+		}
+	}
+	if (pwtmp->pw_gecos != NULL) {
+		pwd->pw_gecos = cursor;
+		cursor += strlcpy(cursor, pwtmp->pw_gecos, end - cursor) + 1;
+		if (cursor > end) {
+			goto err_unlock;
+		}
+	}
+	if (pwtmp->pw_dir != NULL) {
+		pwd->pw_dir = cursor;
+		cursor += strlcpy(cursor, pwtmp->pw_dir, end - cursor) + 1;
+		if (cursor > end) {
+			goto err_unlock;
+		}
+	}
+	if (pwtmp->pw_shell != NULL) {
+		pwd->pw_shell = cursor;
+		cursor += strlcpy(cursor, pwtmp->pw_shell, end - cursor) + 1;
+		if (cursor > end) {
+			goto err_unlock;
+		}
+	}
+	pthread_mutex_unlock(&pwent_mutex);
+	*result = pwd;
+
+	return 0;
+
+err_unlock:
+	pthread_mutex_unlock(&pwent_mutex);
+	return ERANGE;
+}
+int fgetpwent_r(FILE *stream, struct passwd *pwd, char *buf, size_t len,
+                struct passwd **result);
+/**
+ * Get passwd file entry.
+ */
+int fgetpwent_r(FILE *stream, struct passwd *pwd, char *buf, size_t len,
+                struct passwd **result)
+{
+	assert(stream != NULL);
+
+	return fgetpwent_r(stream, pwd, buf, len, result);
+}
+
+int getpwent_r(struct passwd *pwd, char *buf, size_t len,
+               struct passwd **result);
+/**
+ * Get user database entry.
+ *
+ * LSB 5.0: LSB-Core-generic/baselib-getpwent-r-1.html
+ */
+int getpwent_r(struct passwd *pwd, char *buf, size_t len,
+               struct passwd **result)
+{
+	return __fgetpwent_r(NULL, pwd, buf, len, result);
+}
+
+static int fgetspent_r(FILE *fp, struct spwd *spbuf, char *buf, size_t buflen, struct spwd **spbufp) {
+       struct spwd *shadow_entry = fgetspent(fp);
+       if(!shadow_entry)
+               return -1;
+       size_t namplen = strlen(shadow_entry->sp_namp);
+       size_t pwdplen = strlen(shadow_entry->sp_pwdp);
+
+       if(namplen + pwdplen + 2 > buflen)
+               return -1;
+
+       *spbufp = memcpy(spbuf, shadow_entry, sizeof(struct spwd));
+       spbuf->sp_namp = strncpy(buf, shadow_entry->sp_namp, namplen + 1);
+       spbuf->sp_pwdp = strncpy(buf + namplen + 1, shadow_entry->sp_pwdp, pwdplen + 1);
+
+       return 0;
+}
+
+
+#define ALIGN_PTR_TO_SIZE_OF(ptr, type)                                        \
+	((type *) ((((uintptr_t)(ptr)) + sizeof(type) - 1)                     \
+	           & ~(sizeof(type) - 1)))
+
+static pthread_mutex_t grent_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static int __fgetgrent_r(FILE *stream, struct group *grp, char *buf, size_t len,
+                         struct group **result)
+{
+	struct group *grtmp;
+	char *cursor = buf, *end = buf + len;
+
+	*result = NULL;
+	pthread_mutex_lock(&grent_mutex);
+	grtmp = stream != NULL ? fgetgrent(stream) : getgrent();
+	if (grtmp == NULL) {
+		pthread_mutex_unlock(&grent_mutex);
+		return ENOENT;
+	}
+	memcpy(grp, grtmp, sizeof(*grp));
+	if (grtmp->gr_name != NULL) {
+		grp->gr_name = cursor;
+		cursor += strlcpy(cursor, grtmp->gr_name, end - cursor) + 1;
+		if (cursor > end) {
+			goto err_unlock;
+		}
+	}
+	if (grtmp->gr_passwd != NULL) {
+		grp->gr_passwd = cursor;
+		cursor += strlcpy(cursor, grtmp->gr_passwd, end - cursor) + 1;
+		if (cursor > end) {
+			goto err_unlock;
+		}
+	}
+	if (grtmp->gr_mem != NULL) {
+		char **members = ALIGN_PTR_TO_SIZE_OF(cursor, char *);
+		ptrdiff_t nameslen = 0;
+		size_t nmem = 0;
+
+		/* Calculate total size of strings plus their pointers. */
+		while (grtmp->gr_mem[nmem++] != NULL) {
+			nameslen += strlen(grtmp->gr_mem[nmem - 1]) + 1;
+		}
+		nameslen += nmem * sizeof(*members);
+		if (nameslen > end - ((char *) members)) {
+			goto err_unlock;
+		}
+		/* Copy the pointers, including the NULL sentinel. */
+		for (size_t i = 0; i < nmem; ++i) {
+			members[i] = grtmp->gr_mem[i];
+		}
+		/* Copy the strings (the NULL sentinel doesn't point to one). */
+		cursor = (char *) &members[nmem];
+		for (size_t i = 0; i < nmem - 1; ++i) {
+			cursor = stpcpy(cursor, members[i]) + 1;
+		}
+	}
+	pthread_mutex_unlock(&grent_mutex);
+	*result = grp;
+
+	return 0;
+
+err_unlock:
+	pthread_mutex_unlock(&grent_mutex);
+	return ERANGE;
+}
+
+int fgetgrent_r(FILE *stream, struct group *grp, char *buf, size_t len,
+                struct group **result);
+/**
+ * Get group file entry.
+ */
+int fgetgrent_r(FILE *stream, struct group *grp, char *buf, size_t len,
+                struct group **result)
+{
+	assert(stream != NULL);
+
+	return __fgetgrent_r(stream, grp, buf, len, result);
+}
+int getgrent_r(struct group *grp, char *buf, size_t len, struct group **result);
+/**
+ * Get group database entry.
+ *
+ * LSB 5.0: LSB-Core-generic/baselib-getgrent-r-1.html
+ */
+int getgrent_r(struct group *grp, char *buf, size_t len, struct group **result)
+{
+	return __fgetgrent_r(NULL, grp, buf, len, result);
+}
+
+#endif
+
 const gchar *cockpit_bridge_path_passwd = "/etc/passwd";
 const gchar *cockpit_bridge_path_group = "/etc/group";
 const gchar *cockpit_bridge_path_shadow = "/etc/shadow";
